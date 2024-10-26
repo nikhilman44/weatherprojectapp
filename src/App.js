@@ -1,93 +1,132 @@
-import React from 'react'
+// src/App.js
+import React, {useState} from 'react'
 import SearchBar from './components/SearchBar'
 import CurrentWeather from './components/CurrentWeather'
 import Forecast from './components/Forecast'
-import './style.css'
+import './App.css'
+import {
+  fetchCityCoordinates,
+  fetchWeatherData,
+  fetchForecastData,
+} from './getData/api'
 
-class App extends React.Component {
-  constructor(props) {
-    super(props)
-    this.state = {
-      city: '',
-      weatherData: null,
-      forecastData: null,
-      error: null,
-      loading: false,
-    }
-  }
+const App = () => {
+  const [currentWeather, setCurrentWeather] = useState(null)
+  const [forecast, setForecast] = useState([])
+  const [coordinatesError, setCoordinatesError] = useState('')
+  const [weatherError, setWeatherError] = useState('')
+  const [forecastError, setForecastError] = useState('')
+  const [loading, setLoading] = useState(false) // New loading state
 
-  fetchWeatherData = async city => {
-    console.log('Fetching data for:', city)
-    this.setState({
-      loading: true,
-      error: null,
-      weatherData: null,
-      forecastData: null,
-    })
+  const handleForecast = list => {
+    const dailyData = {}
 
-    try {
-      const apiKey = process.env.REACT_APP_OPENWEATHER_API_KEY
-      console.log('Using API Key:', apiKey)
+    list.forEach(entry => {
+      // Extract the date from dt_txt
+      const dateString = entry.dt_txt.split(' ')[0] // Get the YYYY-MM-DD part
 
-      // Fetching geo coordinates
-      const geoResponse = await fetch(
-        `http://api.openweathermap.org/geo/1.0/direct?q=${city}&appid=${apiKey}`,
-      )
-      const geoData = await geoResponse.json()
-      console.log('Geo Data:', geoData)
-
-      if (!geoData || geoData.length === 0) {
-        this.setState({loading: false, error: 'City not found'})
-        return
+      // Initialize daily data if it doesn't exist
+      if (!dailyData[dateString]) {
+        dailyData[dateString] = {
+          maxTemp: entry.main.temp_max,
+          minTemp: entry.main.temp_min,
+          weatherConditions: {},
+        }
+      } else {
+        // Update max and min temperatures
+        dailyData[dateString].maxTemp = Math.max(
+          dailyData[dateString].maxTemp,
+          entry.main.temp_max,
+        )
+        dailyData[dateString].minTemp = Math.min(
+          dailyData[dateString].minTemp,
+          entry.main.temp_min,
+        )
       }
 
-      const {lat, lon} = geoData[0]
-      console.log('Coordinates:', lat, lon)
+      // Count occurrences of weather conditions
+      const condition = entry.weather[0].description
+      const {icon} = entry.weather[0]
 
-      // Fetching current weather data
-      const weatherResponse = await fetch(
-        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}`,
-      )
-      const weatherData = await weatherResponse.json()
-      console.log('Weather Data:', weatherData)
+      if (!dailyData[dateString].weatherConditions[condition]) {
+        dailyData[dateString].weatherConditions[condition] = {
+          count: 1,
+          icon,
+        }
+      } else {
+        dailyData[dateString].weatherConditions[condition].count += 1
+      }
+    })
 
-      // Fetching forecast data
-      const forecastResponse = await fetch(
-        `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&cnt=5&appid=${apiKey}`,
-      )
-      const forecastData = await forecastResponse.json()
-      console.log('Forecast Data:', forecastData)
+    console.log(dailyData)
 
-      this.setState({weatherData, forecastData, loading: false})
-    } catch (error) {
-      console.error('Error fetching data:', error)
-      this.setState({loading: false, error: 'Error fetching data'})
+    // Convert dailyData object to an array of the desired format
+    return Object.entries(dailyData).map(([date, data]) => {
+      // Determine the most frequent weather condition
+      const mostFrequentCondition = Object.entries(
+        data.weatherConditions,
+      ).reduce((prev, curr) => (prev[1].count > curr[1].count ? prev : curr))
+
+      return {
+        date,
+        maxTemp: data.maxTemp,
+        minTemp: data.minTemp,
+        weatherCondition: mostFrequentCondition[0], // Get the condition name
+        weatherIcon: mostFrequentCondition[1].icon, // Get the associated icon
+      }
+    })
+  }
+
+  const handleSearch = async city => {
+    setCoordinatesError('')
+    setWeatherError('')
+    setForecastError('')
+    setCurrentWeather(null)
+    setForecast([])
+    setLoading(true) // Set loading to true when fetching starts
+
+    const coordinates = await fetchCityCoordinates(city)
+    setLoading(false) // Set loading to false after fetching coordinates
+
+    if (!coordinates.success) {
+      setCoordinatesError(coordinates.message)
+      return
+    }
+
+    const {lat, lon} = coordinates.data
+    setLoading(true) // Set loading to true when fetching weather data
+
+    const weatherResponse = await fetchWeatherData(lat, lon)
+    const forecastResponse = await fetchForecastData(lat, lon)
+    setLoading(false) // Set loading to false after fetching weather and forecast data
+
+    if (!weatherResponse.success) {
+      setWeatherError(weatherResponse.message)
+    } else {
+      setCurrentWeather(weatherResponse.data)
+    }
+
+    if (!forecastResponse.success) {
+      setForecastError(forecastResponse.message)
+    } else {
+      const updatedForecastList = handleForecast(forecastResponse.data.list)
+      console.log(updatedForecastList)
+      setForecast(updatedForecastList)
     }
   }
 
-  handleSearch = city => {
-    this.setState({city})
-    this.fetchWeatherData(city)
-  }
-
-  render() {
-    const {weatherData, forecastData, error, loading} = this.state
-
-    return (
-      <div className="container">
-        <h1>Weather Dashboard</h1>
-        <SearchBar onSearch={this.handleSearch} />
-        {loading && <p className="loading">Loading...</p>}
-        {error && <p className="error">{error}</p>}
-        {!loading && !error && weatherData && (
-          <CurrentWeather weatherData={weatherData} />
-        )}
-        {!loading && !error && forecastData && (
-          <Forecast forecastData={forecastData} />
-        )}
-      </div>
-    )
-  }
+  return (
+    <div className="app">
+      <h1>Weather Dashboard</h1>
+      <SearchBar onSearch={handleSearch} />
+      {loading && <p className="loading">Loading...</p>} {/* Loading message */}
+      {coordinatesError && <p className="error">{coordinatesError}</p>}
+      {weatherError && <p className="error">{weatherError}</p>}
+      {currentWeather && <CurrentWeather data={currentWeather} />}
+      {forecastError && <p className="error">{forecastError}</p>}
+      {forecast.length > 0 && <Forecast data={forecast} />}
+    </div>
+  )
 }
 
 export default App
